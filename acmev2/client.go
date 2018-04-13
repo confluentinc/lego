@@ -347,6 +347,7 @@ func (c *Client) ObtainCertificate(domains []string, bundle bool, privKey crypto
 
 	order, err := c.createOrderForIdentifiers(domains)
 	if err != nil {
+		logf("[INFO][%s] acme: Obtaining SAN certificate: Error: %v", strings.Join(domains, ", "), err)
 		identErrors := make(map[string]error)
 		for _, auth := range order.Identifiers {
 			identErrors[auth.Value] = err
@@ -359,13 +360,14 @@ func (c *Client) ObtainCertificate(domains []string, bundle bool, privKey crypto
 		/*for _, auth := range authz {
 			c.disableAuthz(auth)
 		}*/
-
+		logf("[INFO][%s] acme: Get authz for order: Failures: %v", strings.Join(domains, ", "), failures)
 		return CertificateResource{}, failures
 	}
 
 	errs := c.solveChallengeForAuthz(authz)
 	// If any challenge fails - return. Do not generate partial SAN certificates.
 	if len(errs) > 0 {
+		logf("[INFO][%s] acme: Solve challenege for authz: Failures: %v", strings.Join(domains, ", "), failures)
 		return CertificateResource{}, errs
 	}
 
