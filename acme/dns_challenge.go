@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"strconv"
+	"os"
 
 	"github.com/miekg/dns"
 	"github.com/xenolf/lego/log"
@@ -74,7 +76,29 @@ func DNS01Record(domain, keyAuth string) (fqdn string, value string, ttl int) {
 	value = base64.RawURLEncoding.EncodeToString(keyAuthShaBytes[:sha256.Size])
 	ttl = DefaultTTL
 	fqdn = fmt.Sprintf("_acme-challenge.%s.", domain)
+
+	if ok, _ := strconv.ParseBool(os.Getenv("LEGO_EXPERIMENTAL_CNAME_SUPPORT")); ok {
+		r, err := dnsQuery(fqdn, dns.TypeCNAME, RecursiveNameservers, true)
+		// Check if the domain has CNAME then return that
+		if err == nil && r.Rcode == dns.RcodeSuccess {
+			fqdn = updateDomainWithCName(r, fqdn)
+		}
+	}
+
 	return
+}
+
+// Update FQDN with CNAME if any
+func updateDomainWithCName(r *dns.Msg, fqdn string) string {
+	for _, rr := range r.Answer {
+		if cn, ok := rr.(*dns.CNAME); ok {
+			if cn.Hdr.Name == fqdn {
+				return cn.Target
+			}
+		}
+	}
+
+	return fqdn
 }
 
 // dnsChallenge implements the dns-01 challenge according to ACME 7.5
