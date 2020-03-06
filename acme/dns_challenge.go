@@ -85,7 +85,7 @@ func DNS01Record(domain, keyAuth string) (fqdn string, value string, ttl int) {
 
 		log.Infof("FRANK: nameservers: %s\n", RecursiveNameservers)
 		log.Infof("FRANK: r: %#v\n", r)
-		log.Infof("FRANK: err: %s\n", err.Error())
+		log.Infof("FRANK: err: %v\n", err)
 
 		// Check if the domain has CNAME then return that
 		if err == nil && r.Rcode == dns.RcodeSuccess {
