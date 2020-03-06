@@ -77,20 +77,20 @@ func DNS01Record(domain, keyAuth string) (fqdn string, value string, ttl int) {
 	ttl = DefaultTTL
 	fqdn = fmt.Sprintf("_acme-challenge.%s.", domain)
 
-	fmt.Printf("FRANK: fqdn before: %s\n", fqdn)
+	log.Infof("FRANK: fqdn before: %s\n", fqdn)
 
 	if ok, _ := strconv.ParseBool(os.Getenv("LEGO_EXPERIMENTAL_CNAME_SUPPORT")); ok {
-		fmt.Println("FRANK: LEGO_EXPERIMENTAL_CNAME_SUPPORT was executed")
+		log.Infof("FRANK: LEGO_EXPERIMENTAL_CNAME_SUPPORT was executed")
 		r, err := dnsQuery(fqdn, dns.TypeCNAME, RecursiveNameservers, true)
 
-		fmt.Printf("FRANK: nameservers: %s\n", RecursiveNameservers)
-		fmt.Printf("FRANK: r: %#v\n", r)
-		fmt.Printf("FRANK: err: %s\n", err.Error())
+		log.Infof("FRANK: nameservers: %s\n", RecursiveNameservers)
+		log.Infof("FRANK: r: %#v\n", r)
+		log.Infof("FRANK: err: %s\n", err.Error())
 
 		// Check if the domain has CNAME then return that
 		if err == nil && r.Rcode == dns.RcodeSuccess {
 			fqdn = updateDomainWithCName(r, fqdn)
-			fmt.Printf("FRANK: fqdn after: %s\n", fqdn)
+			log.Infof("FRANK: fqdn after: %s\n", fqdn)
 		}
 	}
 
