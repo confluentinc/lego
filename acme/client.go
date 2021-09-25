@@ -8,7 +8,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
-	"io"
 	"io/ioutil"
 	"net"
 	"net/http"
@@ -978,7 +977,7 @@ func (c *Client) get(certURL string, bundle bool) (*RawCertificate, http.Header,
 		return nil, nil, err
 	}
 
-	data, err := io.ReadAll(http.MaxBytesReader(nil, resp.Body, maxBodySize))
+	data, err := ioutil.ReadAll(http.MaxBytesReader(nil, resp.Body, maxBodySize))
 	if err != nil {
 		return nil, resp.Header, err
 	}
