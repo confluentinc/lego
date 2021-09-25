@@ -336,7 +336,7 @@ func (c *Client) QueryRegistration() (*RegistrationResource, error) {
 // your issued certificate as a bundle.
 // This function will never return a partial certificate. If one domain in the list fails,
 // the whole certificate will fail.
-func (c *Client) ObtainCertificateForCSR(csr x509.CertificateRequest, bundle bool) (*CertificateResource, error) {
+func (c *Client) ObtainCertificateForCSR(csr x509.CertificateRequest, bundle bool, preferredChain string) (*CertificateResource, error) {
 	// figure out what domains it concerns
 	// start with the common name
 	domains := []string{csr.Subject.CommonName}
@@ -383,7 +383,7 @@ DNSNames:
 	log.Infof("[%s] acme: Validations succeeded; requesting certificates", strings.Join(domains, ", "))
 
 	failures := make(ObtainError)
-	cert, err := c.requestCertificateForCsr(order, bundle, csr.Raw, nil)
+	cert, err := c.requestCertificateForCsr(order, bundle, csr.Raw, nil, preferredChain)
 	if err != nil {
 		for _, chln := range authz {
 			failures[chln.Identifier.Value] = err
@@ -412,7 +412,7 @@ DNSNames:
 // your issued certificate as a bundle.
 // This function will never return a partial certificate. If one domain in the list fails,
 // the whole certificate will fail.
-func (c *Client) ObtainCertificate(domains []string, bundle bool, privKey crypto.PrivateKey, mustStaple bool) (*CertificateResource, error) {
+func (c *Client) ObtainCertificate(domains []string, bundle bool, privKey crypto.PrivateKey, mustStaple bool, preferredChain string) (*CertificateResource, error) {
 	if len(domains) == 0 {
 		return nil, errors.New("no domains to obtain a certificate for")
 	}
@@ -445,7 +445,7 @@ func (c *Client) ObtainCertificate(domains []string, bundle bool, privKey crypto
 	log.Infof("[%s] acme: Validations succeeded; requesting certificates", strings.Join(domains, ", "))
 
 	failures := make(ObtainError)
-	cert, err := c.requestCertificateForOrder(order, bundle, privKey, mustStaple)
+	cert, err := c.requestCertificateForOrder(order, bundle, privKey, mustStaple, preferredChain)
 	if err != nil {
 		for _, auth := range authz {
 			failures[auth.Identifier.Value] = err
@@ -486,7 +486,7 @@ func (c *Client) RevokeCertificate(certificate []byte) error {
 // If bundle is true, the []byte contains both the issuer certificate and
 // your issued certificate as a bundle.
 // For private key reuse the PrivateKey property of the passed in CertificateResource should be non-nil.
-func (c *Client) RenewCertificate(cert CertificateResource, bundle, mustStaple bool) (*CertificateResource, error) {
+func (c *Client) RenewCertificate(cert CertificateResource, bundle, mustStaple bool, preferredChain string) (*CertificateResource, error) {
 	// Input certificate is PEM encoded. Decode it here as we may need the decoded
 	// cert later on in the renewal process. The input may be a bundle or a single certificate.
 	certificates, err := parsePEMBundle(cert.Certificate)
@@ -511,7 +511,7 @@ func (c *Client) RenewCertificate(cert CertificateResource, bundle, mustStaple b
 		if errP != nil {
 			return nil, errP
 		}
-		newCert, failures := c.ObtainCertificateForCSR(*csr, bundle)
+		newCert, failures := c.ObtainCertificateForCSR(*csr, bundle, preferredChain)
 		return newCert, failures
 	}
 
@@ -537,7 +537,7 @@ func (c *Client) RenewCertificate(cert CertificateResource, bundle, mustStaple b
 		domains = append(domains, x509Cert.Subject.CommonName)
 	}
 
-	newCert, err := c.ObtainCertificate(domains, bundle, privKey, mustStaple)
+	newCert, err := c.ObtainCertificate(domains, bundle, privKey, mustStaple, preferredChain)
 	return newCert, err
 }
 
@@ -714,7 +714,7 @@ func (c *Client) disableAuthz(authURL string) error {
 	return err
 }
 
-func (c *Client) requestCertificateForOrder(order orderResource, bundle bool, privKey crypto.PrivateKey, mustStaple bool) (*CertificateResource, error) {
+func (c *Client) requestCertificateForOrder(order orderResource, bundle bool, privKey crypto.PrivateKey, mustStaple bool, preferredChain string) (*CertificateResource, error) {
 
 	var err error
 	if privKey == nil {
@@ -746,10 +746,10 @@ func (c *Client) requestCertificateForOrder(order orderResource, bundle bool, pr
 		return nil, err
 	}
 
-	return c.requestCertificateForCsr(order, bundle, csr, pemEncode(privKey))
+	return c.requestCertificateForCsr(order, bundle, csr, pemEncode(privKey), preferredChain)
 }
 
-func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr []byte, privateKeyPem []byte) (*CertificateResource, error) {
+func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr []byte, privateKeyPem []byte, preferredChain string) (*CertificateResource, error) {
 	commonName := order.Domains[0]
 
 	csrString := base64.RawURLEncoding.EncodeToString(csr)
@@ -771,7 +771,7 @@ func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr 
 
 	if retOrder.Status == statusValid {
 		// if the certificate is available right away, short cut!
-		ok, err := c.checkCertResponse(retOrder, &certRes, bundle)
+		ok, err := c.checkCertResponse(retOrder, &certRes, bundle, preferredChain)
 		if err != nil {
 			return nil, err
 		}
@@ -796,7 +796,7 @@ func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr 
 				return nil, err
 			}
 
-			done, err := c.checkCertResponse(retOrder, &certRes, bundle)
+			done, err := c.checkCertResponse(retOrder, &certRes, bundle, preferredChain)
 			if err != nil {
 				return nil, err
 			}
