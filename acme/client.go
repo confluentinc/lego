@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
@@ -334,7 +335,7 @@ func (c *Client) QueryRegistration() (*RegistrationResource, error) {
 // your issued certificate as a bundle.
 // This function will never return a partial certificate. If one domain in the list fails,
 // the whole certificate will fail.
-func (c *Client) ObtainCertificateForCSR(csr x509.CertificateRequest, bundle bool) (*CertificateResource, error) {
+func (c *Client) ObtainCertificateForCSR(csr x509.CertificateRequest, bundle bool, preferredChain string) (*CertificateResource, error) {
 	// figure out what domains it concerns
 	// start with the common name
 	domains := []string{csr.Subject.CommonName}
@@ -381,7 +382,7 @@ DNSNames:
 	log.Infof("[%s] acme: Validations succeeded; requesting certificates", strings.Join(domains, ", "))
 
 	failures := make(ObtainError)
-	cert, err := c.requestCertificateForCsr(order, bundle, csr.Raw, nil)
+	cert, err := c.requestCertificateForCsr(order, bundle, csr.Raw, nil, preferredChain)
 	if err != nil {
 		for _, chln := range authz {
 			failures[chln.Identifier.Value] = err
@@ -410,7 +411,7 @@ DNSNames:
 // your issued certificate as a bundle.
 // This function will never return a partial certificate. If one domain in the list fails,
 // the whole certificate will fail.
-func (c *Client) ObtainCertificate(domains []string, bundle bool, privKey crypto.PrivateKey, mustStaple bool) (*CertificateResource, error) {
+func (c *Client) ObtainCertificate(domains []string, bundle bool, privKey crypto.PrivateKey, mustStaple bool, preferredChain string) (*CertificateResource, error) {
 	if len(domains) == 0 {
 		return nil, errors.New("no domains to obtain a certificate for")
 	}
@@ -443,7 +444,7 @@ func (c *Client) ObtainCertificate(domains []string, bundle bool, privKey crypto
 	log.Infof("[%s] acme: Validations succeeded; requesting certificates", strings.Join(domains, ", "))
 
 	failures := make(ObtainError)
-	cert, err := c.requestCertificateForOrder(order, bundle, privKey, mustStaple)
+	cert, err := c.requestCertificateForOrder(order, bundle, privKey, mustStaple, preferredChain)
 	if err != nil {
 		for _, auth := range authz {
 			failures[auth.Identifier.Value] = err
@@ -484,7 +485,7 @@ func (c *Client) RevokeCertificate(certificate []byte) error {
 // If bundle is true, the []byte contains both the issuer certificate and
 // your issued certificate as a bundle.
 // For private key reuse the PrivateKey property of the passed in CertificateResource should be non-nil.
-func (c *Client) RenewCertificate(cert CertificateResource, bundle, mustStaple bool) (*CertificateResource, error) {
+func (c *Client) RenewCertificate(cert CertificateResource, bundle, mustStaple bool, preferredChain string) (*CertificateResource, error) {
 	// Input certificate is PEM encoded. Decode it here as we may need the decoded
 	// cert later on in the renewal process. The input may be a bundle or a single certificate.
 	certificates, err := parsePEMBundle(cert.Certificate)
@@ -509,7 +510,7 @@ func (c *Client) RenewCertificate(cert CertificateResource, bundle, mustStaple b
 		if errP != nil {
 			return nil, errP
 		}
-		newCert, failures := c.ObtainCertificateForCSR(*csr, bundle)
+		newCert, failures := c.ObtainCertificateForCSR(*csr, bundle, preferredChain)
 		return newCert, failures
 	}
 
@@ -535,7 +536,7 @@ func (c *Client) RenewCertificate(cert CertificateResource, bundle, mustStaple b
 		domains = append(domains, x509Cert.Subject.CommonName)
 	}
 
-	newCert, err := c.ObtainCertificate(domains, bundle, privKey, mustStaple)
+	newCert, err := c.ObtainCertificate(domains, bundle, privKey, mustStaple, preferredChain)
 	return newCert, err
 }
 
@@ -712,7 +713,7 @@ func (c *Client) disableAuthz(authURL string) error {
 	return err
 }
 
-func (c *Client) requestCertificateForOrder(order orderResource, bundle bool, privKey crypto.PrivateKey, mustStaple bool) (*CertificateResource, error) {
+func (c *Client) requestCertificateForOrder(order orderResource, bundle bool, privKey crypto.PrivateKey, mustStaple bool, preferredChain string) (*CertificateResource, error) {
 
 	var err error
 	if privKey == nil {
@@ -744,10 +745,10 @@ func (c *Client) requestCertificateForOrder(order orderResource, bundle bool, pr
 		return nil, err
 	}
 
-	return c.requestCertificateForCsr(order, bundle, csr, pemEncode(privKey))
+	return c.requestCertificateForCsr(order, bundle, csr, pemEncode(privKey), preferredChain)
 }
 
-func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr []byte, privateKeyPem []byte) (*CertificateResource, error) {
+func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr []byte, privateKeyPem []byte, preferredChain string) (*CertificateResource, error) {
 	commonName := order.Domains[0]
 
 	csrString := base64.RawURLEncoding.EncodeToString(csr)
@@ -769,7 +770,7 @@ func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr 
 
 	if retOrder.Status == statusValid {
 		// if the certificate is available right away, short cut!
-		ok, err := c.checkCertResponse(retOrder, &certRes, bundle)
+		ok, err := c.checkCertResponse(retOrder, &certRes, bundle, preferredChain)
 		if err != nil {
 			return nil, err
 		}
@@ -794,7 +795,7 @@ func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr 
 				return nil, err
 			}
 
-			done, err := c.checkCertResponse(retOrder, &certRes, bundle)
+			done, err := c.checkCertResponse(retOrder, &certRes, bundle, preferredChain)
 			if err != nil {
 				return nil, err
 			}
@@ -805,58 +806,57 @@ func (c *Client) requestCertificateForCsr(order orderResource, bundle bool, csr 
 	}
 }
 
+// RawCertificate raw data of a certificate.
+type RawCertificate struct {
+	Cert   []byte
+	Issuer []byte
+}
+
 // checkCertResponse checks to see if the certificate is ready and a link is contained in the
 // response. if so, loads it into certRes and returns true. If the cert
 // is not yet ready, it returns false. The certRes input
 // should already have the Domain (common name) field populated. If bundle is
 // true, the certificate will be bundled with the issuer's cert.
-func (c *Client) checkCertResponse(order orderMessage, certRes *CertificateResource, bundle bool) (bool, error) {
+func (c *Client) checkCertResponse(order orderMessage, certRes *CertificateResource, bundle bool, preferredChain string) (bool, error) {
 	switch order.Status {
 	case statusValid:
-		resp, err := httpGet(order.Certificate)
+		certs, err := c.GetAll(order.Certificate, bundle)
 		if err != nil {
 			return false, err
 		}
 
-		cert, err := ioutil.ReadAll(limitReader(resp.Body, maxBodySize))
-		if err != nil {
-			return false, err
-		}
-
-		// The issuer certificate link may be supplied via an "up" link
-		// in the response headers of a new certificate.  See
-		// https://tools.ietf.org/html/draft-ietf-acme-acme-12#section-7.4.2
-		links := parseLinks(resp.Header["Link"])
-		if link, ok := links["up"]; ok {
-			issuerCert, err := c.getIssuerCertificate(link)
-
-			if err != nil {
-				// If we fail to acquire the issuer cert, return the issued certificate - do not fail.
-				log.Warnf("[%s] acme: Could not bundle issuer certificate: %v", certRes.Domain, err)
-			} else {
-				issuerCert = pemEncode(derCertificateBytes(issuerCert))
-
-				// If bundle is true, we want to return a certificate bundle.
-				// To do this, we append the issuer cert to the issued cert.
-				if bundle {
-					cert = append(cert, issuerCert...)
-				}
-
-				certRes.IssuerCertificate = issuerCert
-			}
-		} else {
-			// Get issuerCert from bundled response from Let's Encrypt
-			// See https://community.letsencrypt.org/t/acme-v2-no-up-link-in-response/64962
-			_, rest := pem.Decode(cert)
-			if rest != nil {
-				certRes.IssuerCertificate = rest
-			}
-		}
-
-		certRes.Certificate = cert
+		// Set the default certificate
+		certRes.IssuerCertificate = certs[order.Certificate].Issuer
+		certRes.Certificate = certs[order.Certificate].Cert
 		certRes.CertURL = order.Certificate
 		certRes.CertStableURL = order.Certificate
-		log.Infof("[%s] Server responded with a certificate.", certRes.Domain)
+
+		if preferredChain == "" {
+			log.Infof("[%s] Server responded with a certificate.", certRes.Domain)
+
+			return true, nil
+		}
+
+		for link, cert := range certs {
+			ok, err := hasPreferredChain(cert.Issuer, preferredChain)
+			if err != nil {
+				return false, err
+			}
+
+			if ok {
+				log.Infof("[%s] Server responded with a certificate for the preferred certificate chains %q.", certRes.Domain, preferredChain)
+
+				certRes.IssuerCertificate = cert.Issuer
+				certRes.Certificate = cert.Cert
+				certRes.CertURL = link
+				certRes.CertStableURL = link
+
+				return true, nil
+			}
+		}
+
+		log.Infof("lego has been configured to prefer certificate chains with issuer %q, but no chain from the CA matched this issuer. Using the default certificate chain instead.", preferredChain)
+
 		return true, nil
 
 	case "processing":
@@ -907,6 +907,146 @@ func parseLinks(links []string) map[string]string {
 	}
 
 	return linkMap
+}
+
+// getLink get a rel into the Link header.
+func getLink(header http.Header, rel string) string {
+	links := getLinks(header, rel)
+	if len(links) < 1 {
+		return ""
+	}
+
+	return links[0]
+}
+
+func getLinks(header http.Header, rel string) []string {
+	linkExpr := regexp.MustCompile(`<(.+?)>(?:;[^;]+)*?;\s*rel="(.+?)"`)
+
+	var links []string
+	for _, link := range header["Link"] {
+		for _, m := range linkExpr.FindAllStringSubmatch(link, -1) {
+			if len(m) != 3 {
+				continue
+			}
+			if m[2] == rel {
+				links = append(links, m[1])
+			}
+		}
+	}
+
+	return links
+}
+
+// getCertificateChain Returns the certificate and the issuer certificate.
+func (c *Client) getCertificateChain(cert []byte, headers http.Header, bundle bool, certURL string) *RawCertificate {
+	// Get issuerCert from bundled response from Let's Encrypt
+	// See https://community.letsencrypt.org/t/acme-v2-no-up-link-in-response/64962
+	_, issuer := pem.Decode(cert)
+	if issuer != nil {
+		return &RawCertificate{Cert: cert, Issuer: issuer}
+	}
+
+	// The issuer certificate link may be supplied via an "up" link
+	// in the response headers of a new certificate.
+	// See https://tools.ietf.org/html/rfc8555#section-7.4.2
+	up := getLink(headers, "up")
+
+	issuer, err := c.getIssuerFromLink(up)
+	if err != nil {
+		// If we fail to acquire the issuer cert, return the issued certificate - do not fail.
+		log.Warnf("acme: Could not bundle issuer certificate [%s]: %v", certURL, err)
+	} else if len(issuer) > 0 {
+		// If bundle is true, we want to return a certificate bundle.
+		// To do this, we append the issuer cert to the issued cert.
+		if bundle {
+			cert = append(cert, issuer...)
+		}
+	}
+
+	return &RawCertificate{Cert: cert, Issuer: issuer}
+}
+
+// get Returns the certificate and the "up" link.
+func (c *Client) get(certURL string, bundle bool) (*RawCertificate, http.Header, error) {
+	if certURL == "" {
+		return nil, nil, errors.New("certificate[get]: empty URL")
+	}
+
+	resp, err := httpGet(certURL)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	data, err := ioutil.ReadAll(http.MaxBytesReader(nil, resp.Body, maxBodySize))
+	if err != nil {
+		return nil, resp.Header, err
+	}
+
+	cert := c.getCertificateChain(data, resp.Header, bundle, certURL)
+
+	return cert, resp.Header, err
+}
+
+// getIssuerFromLink requests the issuer certificate.
+func (c *Client) getIssuerFromLink(up string) ([]byte, error) {
+	if up == "" {
+		return nil, nil
+	}
+
+	log.Infof("acme: Requesting issuer cert from %s", up)
+
+	cert, _, err := c.get(up, false)
+	if err != nil {
+		return nil, err
+	}
+
+	_, err = x509.ParseCertificate(cert.Cert)
+	if err != nil {
+		return nil, err
+	}
+
+	return pemEncode(derCertificateBytes(cert.Cert)), nil
+}
+
+func hasPreferredChain(issuer []byte, preferredChain string) (bool, error) {
+	certs, err := parsePEMBundle(issuer)
+	if err != nil {
+		return false, err
+	}
+
+	topCert := certs[len(certs)-1]
+
+	if topCert.Issuer.CommonName == preferredChain {
+		return true, nil
+	}
+
+	return false, nil
+}
+
+// GetAll the certificates and the alternate certificates.
+// bundle' is only applied if the issuer is provided by the 'up' link.
+func (c *Client) GetAll(certURL string, bundle bool) (map[string]*RawCertificate, error) {
+	cert, headers, err := c.get(certURL, bundle)
+	if err != nil {
+		return nil, err
+	}
+
+	certs := map[string]*RawCertificate{certURL: cert}
+
+	// URLs of "alternate" link relation
+	// - https://tools.ietf.org/html/rfc8555#section-7.4.2
+	alts := getLinks(headers, "alternate")
+
+	for _, alt := range alts {
+		altCert, _, err := c.get(alt, bundle)
+		if err != nil {
+			return nil, err
+		}
+
+		certs[alt] = altCert
+	}
+
+	return certs, nil
 }
 
 // validate makes the ACME server start validating a
